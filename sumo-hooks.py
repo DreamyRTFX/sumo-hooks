@@ -1,9 +1,3 @@
-import asyncio
-import discord
-from discord.ext import commands, tasks
-import discord.app_commands as app_commands
-
-import threading
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import os
@@ -18,64 +12,53 @@ load_dotenv()
 _secret = os.getenv('SECRET')
 host = os.getenv('MYIP')
 port = os.getenv('PORT')
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+barnsumo = os.getenv('barnsumo')
+failsumo = os.getenv('failsumo')
 
-# Discord bot setup with hybrid commands
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='/', intents=intents)
-
-async def smokeyBot():
-    await bot.start(DISCORD_TOKEN)
-
-@bot.event
-async def on_ready():
-    print(f'Bot logged in as {bot.user}')
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash command(s)")
-
-    except Exception as e:
-        print(f"Error syncing commands: {e}")
-
-@bot.command()
-async def hello(ctx):
-
-    for guild in bot.guilds:
-        # Try to find #general channel
-        try:
-            channel = discord.utils.get(guild.text_channels, name="sumo")
-        except Exception as e:
-            print(f"Error finding #sumo channel in server {guild.name}: {e}")
-        # Fallback to system channel if #general not found
-        if channel:
-            await channel.send("Hello, Sumo World!")
-        if not channel and guild.system_channel:
-            channel = guild.system_channel
-            await channel.send("Hello, General World!")
-        else:
-            print(f"No suitable channel found in server {guild.name}")
-
-@bot.command()
-async def torikumi(ctx):
-    try:
-        tk = load_data("latest_newMatches.json")
-        t = format_match(tk)
-        print (t)
-    except Exception as e:
-        print("Exception while load/format ", e)
-    for guild in bot.guilds:
-        # Try to find #general channel
-        try:
-            channel = discord.utils.get(guild.text_channels, name="sumo")
-        except Exception as e:
-            print(f"Error finding #sumo channel in server {guild.name}: {e}")
-        # Fallback to system channel if #general not found
-        if channel:
-            await channel.send(f"""'''Today's torikumi:\n {t}'''""")
-
-        else:
-            print(f"No suitable channel found in server {guild.name}")
+_request = {
+  "username": "Sumo-hooks",
+  "avatar_url": "",
+  "content": "Sumo update!",
+  "embeds": [
+    {
+      "author": {
+        "name": "",
+        "url": "https://www.sumo-api.com/",
+        "icon_url": ""
+      },
+      "title": "Title",
+      "url": "https://www.sumo-api.com/",
+      "description": "Makuuchi division matches for the day",
+      "color": 15258703,
+      "fields": [
+        {
+          "name": "Left side",
+          "value": "",
+          "inline": "true"
+        },
+        {
+          "name": "Right side",
+          "value": "",
+          "inline": "true"
+        },
+        {
+          "name": "",
+          "value": ""
+        }
+      ],
+      "thumbnail": {
+        "url": ""
+      },
+      "image": {
+        "url": ""
+      },
+      "footer": {
+        "text": "*It's just a phase, it'll pass* -- Phasedozer",
+        "icon_url": ""
+      }
+    }
+  ]
+}
 
 app = Flask(__name__)
 
@@ -85,7 +68,6 @@ def run_flask():
 @app.route("/matchresults", methods=["POST"])
 def matchresults():
     
-    global _secret
     content = request.json
     payload: bytes = content.get("payload")
     decoded_bytes = base64.b64decode(payload)
@@ -94,18 +76,19 @@ def matchresults():
     print(sig)
     print(calc_sig(request.base_url, decoded_bytes, _secret))
     print(decoded_json)
-    today = datetime.date.today().isoformat()
+    today = datetime.today().date()
 
     save_data(decoded_json, f"{today}_matchResults.json")    #save today's data separately
     save_data(decoded_json, "latest_matchResults.json")
     #accumulate_data(decoded_json, "matchResults.json")
+    print("matchresults hit")
+    post_webhook(format_match(torikumi()))
 
     return jsonify(message={"state": "succeeded"}, status=204), 204
 
 @app.route("/newmatches", methods=["POST"])
 def newmatches():
     
-    global _secret
     content = request.json
     payload: bytes = content.get("payload")
     decoded_bytes = base64.b64decode(payload)
@@ -115,12 +98,24 @@ def newmatches():
     print(calc_sig(request.base_url, decoded_bytes, _secret))
     print(decoded_json)
 
-    today = datetime.date.today().isoformat()
+    today = datetime.today().date()
     save_data(decoded_json, f"{today}_newMatches.json")    #save today's data separately
     save_data(decoded_json, "latest_newMatches.json")
     #accumulate_data(decoded_json, "newMatches.json")
+    print("newmatches hit")
+
 
     return jsonify(message={"state": "succeeded"}, status=204), 204
+
+def post_webhook(json):
+    
+    try:
+        post=requests.post(url=barnsumo,json=json)
+        post.raise_for_status()
+
+    except Exception as e:
+        print(e)
+    return
 
 def decode_data(content):
     payload: bytes = content.get("payload")
@@ -144,20 +139,55 @@ def save_data (data, filename):
     with open (filename, "w") as f:
         json.dump(data, f)
         return
+    
+def torikumi():
+    data = requests.get(url=f"https://www.sumo-api.com/api/basho/202511/torikumi/Makuuchi/1")
+    tk = data.json()
+    startDate = tk.get("startDate", False)
+    endDate = tk.get("endDate", False)
+    to = tk.get("torikumi", False)
+    yu = tk.get("yusho", False)
 
-def format_match(data):     # process newMatches torikumi format
+    if startDate:
+        start_date = datetime.strptime(startDate, "%Y-%m-%dT%H:%M:%SZ").date()
+        today = datetime.now(timezone.utc).date()
+        diff = (today-start_date).days + 2
+
+        if diff <= 15:
+            while True:
+                data = requests.get(url=f"https://www.sumo-api.com/api/basho/202511/torikumi/Makuuchi/{diff}")
+                to = data.json().get("torikumi", False)
+                if tk:
+                    break
+                diff -=1
+            return to
+        if diff > 15:
+            if yu:
+                data = requests.get(url=f"https://www.sumo-api.com/api/basho/202511/torikumi/Makuuchi/{diff}")
+            
+def format_match(data):
     sch=""
+    left="" 
+    right=""
     wr = get_wr()
+    day = data[0]["day"]
     for match in data:
         westname = match.get("westShikona")
         eastname = match.get("eastShikona")
-        westid = wr.get(match.get("westId"), "n/a")
-        eastid = wr.get(match.get("eastId"), "n/a")
-
-        matchString = f"""{(westname+ "("+westid+")").center(10)}  vs  {(eastname+"("+eastid+")").rjust(15)}\n"""
-        #        {match.get("westRank").center(25)} {match.get("eastRank").center(25)}
-        sch = sch + matchString
-    return sch
+        westrank = match.get("westRank")
+        eastrank = match.get("eastRank")
+        westid = wr.get(match.get("westId", False), "n/a")
+        eastid = wr.get(match.get("eastId", False), "n/a")
+        left = left + f"""**{eastname}** ({eastid})\n*{eastrank}*\n""" 
+        right = right + f"""**{westname}** ({westid})\n*{westrank}*\n"""
+        # matchString = f"""{(westname+ "("+westid+")").center(30)}  vs  {(eastname+"("+eastid+")").center(30)}
+        # {match.get("westRank").center(25)} {match.get("eastRank").center(25)}
+        # {"====".center(70)}\n"""
+        # sch = sch + matchString
+    _request["embeds"][0]["fields"][0]["value"] = left
+    _request["embeds"][0]["fields"][1]["value"] = right
+    _request["embeds"][0]["title"] = f"Day {day}"
+    return _request
 
 def get_wr():    # get latest banzuke from https://www.sumo-api.com/api/basho/202511/banzuke/Makuuchi
     wr: dict = {}
@@ -192,38 +222,7 @@ def calc_sig(url: str, body: bytes, secret: str):
     sig.update(url.encode("utf-8"))
     sig.update(body)
     return (sig.hexdigest())
-# try:
-#     testrequest = requests.get (url="https://www.sumo-api.com/api/rikishis?limit=10")
-#     testrequest.raise_for_status()
-#     for record in testrequest.json().get("records"):
-#         print(record.get('heya'))
-
-
-#     print(testrequest.headers.items())
-# except requests.RequestException as e:
-#     print("Request exception: ", e)
 
 if __name__ == "__main__":
 
-    threading.Thread(target=run_flask).start()
-    asyncio.run(smokeyBot())
-
-# def subscribe(hookType: str):
-
-#   body = json.dumps ({
-#   "name":"1234444444",
-#   "destination":f"http://{host}:{port}/sumo",
-#   "secret":secret,
-#   "subscriptions":
-#   {
-#     hookType: True,
-#   }
-# })
-#   try:
-#       testrequest = requests.post(url = f"https://www.sumo-api.com/api/webhook/test?type={hookType}",data=body)
-#       testrequest.raise_for_status()
-#       print (testrequest.status_code)
-#       print(testrequest.headers.items())
-#   except requests.RequestException as e:
-#       print("Request exception: ", e)
-#       print(testrequest.headers.items())
+    app.run(host=host, port=port)
