@@ -7,11 +7,14 @@ from datetime import datetime, timezone
 import hmac
 import hashlib
 import base64
+import random
+from dataclasses import dataclass
 
 load_dotenv()
 _secret = os.getenv('SECRET')
 host = os.getenv('MYIP')
 port = os.getenv('PORT')
+endpoints = os.getenv('endpoints').split(",")
 barnsumo = os.getenv('barnsumo')
 failsumo = os.getenv('failsumo')
 
@@ -31,20 +34,6 @@ _request = {
       "description": "Makuuchi division matches for the day",
       "color": 15258703,
       "fields": [
-        {
-          "name": "Left side",
-          "value": "",
-          "inline": "true"
-        },
-        {
-          "name": "Right side",
-          "value": "",
-          "inline": "true"
-        },
-        {
-          "name": "",
-          "value": ""
-        }
       ],
       "thumbnail": {
         "url": ""
@@ -59,9 +48,38 @@ _request = {
     }
   ]
 }
+matchups: list = []
+winloss: dict = {}
+tjson: dict = {}
 
+@dataclass
+class Matchup:
+  east_id: int
+  east_shikona: str
+  east_rank: str
+  east_wins: int
+  east_losses: int
+
+  west_id: int
+  west_shikona: str
+  west_rank: str
+  west_wins: int
+  west_losses: int
+
+  date: int
+  day: int
+
+@dataclass
+class Field:
+
+   name: str
+   value: str
+   inline: str = "true"
+
+   def to_dict(self):
+     return self.__dict__
+   
 app = Flask(__name__)
-
 def run_flask():
     app.run(host=host, port=port)
 
@@ -80,9 +98,8 @@ def matchresults():
 
     save_data(decoded_json, f"{today}_matchResults.json")    #save today's data separately
     save_data(decoded_json, "latest_matchResults.json")
-    #accumulate_data(decoded_json, "matchResults.json")
     print("matchresults hit")
-    post_webhook(format_match(torikumi()))
+    #post_webhook(format_match(torikumi()))
 
     return jsonify(message={"state": "succeeded"}, status=204), 204
 
@@ -98,17 +115,20 @@ def newmatches():
     print(calc_sig(request.base_url, decoded_bytes, _secret))
     print(decoded_json)
 
+    bashoid = decoded_json[0].get("bashoId")
+    day = decoded_json[0].get("day")
+    post_webhook(format_request(collectData(bashoid, day)))
+
     today = datetime.today().date()
     save_data(decoded_json, f"{today}_newMatches.json")    #save today's data separately
     save_data(decoded_json, "latest_newMatches.json")
-    #accumulate_data(decoded_json, "newMatches.json")
     print("newmatches hit")
-
 
     return jsonify(message={"state": "succeeded"}, status=204), 204
 
 def post_webhook(json):
-    
+    #for ep in endpoints:
+        
     try:
         post=requests.post(url=barnsumo,json=json)
         post.raise_for_status()
@@ -123,7 +143,72 @@ def decode_data(content):
     decoded_json = json.loads(decoded_bytes.decode("utf-8"))
     return decoded_json
     
-def load_data(filename):
+def collectData(date, day) -> list:  #pass YYYYMM to get that basho, day
+
+  tdata = requests.get(url=f"https://www.sumo-api.com/api/basho/{date}/torikumi/Makuuchi/{day}")
+  tjson = tdata.json()
+  _request["content"] = f"Grand Sumo {date} update! Full makuuchi results so far [here](https://www.sumo-api.com/dashboard/hoshitori/{date}/Makuuchi)"
+  _request["embeds"][0]["title"] = f"Day {day} schedule"
+  _request["embeds"][0]["url"] = f"https://www.sumo-api.com/dashboard/torikumi/{date}/Makuuchi/{day} "
+  _request["embeds"][0]["color"] = random.randint(1,16777210)
+
+  for div in ["Makuuchi", "Juryo"]:
+    bdata = requests.get(url=f"https://www.sumo-api.com/api/basho/{date}/banzuke/{div}")
+    bjson = bdata.json()
+    for ew in ["east", "west"]:
+       for rikishi in bjson.get(ew):
+        winloss.update({
+           rikishi.get("rikishiID") : [rikishi.get("wins"), rikishi.get("losses") + rikishi.get("absences")]
+           })
+
+  for mu in tjson.get("torikumi"):
+      matchup = Matchup(
+          mu.get("eastId"),
+          mu.get("eastShikona"),
+          mu.get("eastRank"),
+          winloss.get(mu.get("eastId"))[0],
+          winloss.get(mu.get("eastId"))[1],
+          mu.get("westId"),
+          mu.get("westShikona"),
+          mu.get("westRank"),
+          winloss.get(mu.get("westId"))[0],
+          winloss.get(mu.get("westId"))[1],
+          date,
+          day
+      )
+      matchups.append(matchup)
+  return matchups
+
+def r_populate(left, vs, right):
+        
+  field_l = Field("Left (East)", left)
+  field_m = Field("Vs", vs)
+  field_r = Field("Right (West)", right)
+  _request["embeds"][0]["fields"].append(field_l.to_dict())
+  _request["embeds"][0]["fields"].append(field_m.to_dict())
+  _request["embeds"][0]["fields"].append(field_r.to_dict())
+  return
+
+def format_request(data: list) -> dict:
+  left="" 
+  right=""
+  vs=""
+
+  for match in data:
+      westid = winloss.get(match.west_id)
+      eastid = winloss.get(match.east_id)
+      left = left + f"""**[{match.east_shikona}](https://www.sumo-api.com/dashboard/rikishi/{match.east_id})** {eastid}\n*{match.east_rank}*\n""" 
+      vs = vs + f"""**[vs](https://www.sumo-api.com/dashboard/matchups/{match.east_id}/{match.west_id})**\n\n"""
+      right = right + f"""**[{match.west_shikona}](https://www.sumo-api.com/dashboard/rikishi/{match.west_id})** {westid}\n*{match.west_rank}*\n"""
+      if len(left)>850: # accumulate until 900+ then dump and flush
+        r_populate(left, vs, right)
+        left="" 
+        right=""
+        vs=""
+  r_populate(left, vs, right) # dump the remainder
+  return _request
+
+def load_data(filename) -> any:
     try:
         with open (filename, "r",encoding='utf-8') as f:
             return json.load(f)
@@ -140,7 +225,7 @@ def save_data (data, filename):
         json.dump(data, f)
         return
     
-def torikumi():
+def torikumi() -> None:
     data = requests.get(url=f"https://www.sumo-api.com/api/basho/202511/torikumi/Makuuchi/1")
     tk = data.json()
     startDate = tk.get("startDate", False)
@@ -163,7 +248,11 @@ def torikumi():
             return to
         if diff > 15:
             if yu:
-                data = requests.get(url=f"https://www.sumo-api.com/api/basho/202511/torikumi/Makuuchi/{diff}")
+                data = requests.get(url=f"https://www.sumo-api.com/api/basho/202511/torikumi/Makuuchi/14")
+                to = data.json().get("torikumi", False)
+
+                diff -=1
+            return to
             
 def format_match(data):
     sch=""
@@ -201,21 +290,6 @@ def get_wr():    # get latest banzuke from https://www.sumo-api.com/api/basho/20
                 wl= f"{rikishi["wins"]} - {rikishi["losses"]}"
                 wr.update({rikishi["rikishiID"]: wl})
     return (wr) #{rikishiid: "win - loss"}
-
-def accumulate_data(new_data, filename):
-    # today = datetime.date.today().isoformat()
-    # save_data(new_data, f"{today}_newMatches.json")    #save today's data separately
-
-    history = load_data(filename)   #open existing
-    for element in new_data:    #for each {} in []
-            
-        if element["day"] >= history[-1]["day"]:
-            history.append(element)
-    #history.append(new_data)
-    #history.append(["Date: ", today])
-    
-    save_data(history, filename)
-    return
 
 def calc_sig(url: str, body: bytes, secret: str):
     sig = hmac.new(secret.encode("utf-8"), digestmod=hashlib.sha256)
