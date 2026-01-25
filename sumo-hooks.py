@@ -96,11 +96,9 @@ def matchresults():
     print(decoded_json)
     today = datetime.today().date()
 
-    save_data(decoded_json, f"{today}_matchResults.json")    #save today's data separately
-    save_data(decoded_json, "latest_matchResults.json")
+    save_data(decoded_json, f"/home/bleakill/sumo-hooks/{today}_matchResults.json")    #save today's data separately
+    save_data(decoded_json, "/home/bleakill/sumo-hooks/latest_matchResults.json")
     print("matchresults hit")
-    #post_webhook(format_match(torikumi()))
-
     return jsonify(message={"state": "succeeded"}, status=204), 204
 
 @app.route("/newmatches", methods=["POST"])
@@ -117,24 +115,24 @@ def newmatches():
 
     bashoid = decoded_json[0].get("bashoId")
     day = decoded_json[0].get("day")
-    post_webhook(format_request(collectData(bashoid, day)))
+    #post_webhook(format_request(collectData(bashoid, day)))
 
     today = datetime.today().date()
-    save_data(decoded_json, f"{today}_newMatches.json")    #save today's data separately
-    save_data(decoded_json, "latest_newMatches.json")
+    save_data(decoded_json, f"/home/bleakill/sumo-hooks/{today}_newMatches.json")    #save today's data separately
+    save_data(decoded_json, "/home/bleakill/sumo-hooks/latest_newMatches.json")
     print("newmatches hit")
 
     return jsonify(message={"state": "succeeded"}, status=204), 204
 
 def post_webhook(json):
-    #for ep in endpoints:
+    for ep in endpoints:
         
-    try:
-        post=requests.post(url=barnsumo,json=json)
-        post.raise_for_status()
+        try:
+            post=requests.post(url=ep,json=json)
+            post.raise_for_status()
 
-    except Exception as e:
-        print(e)
+        except Exception as e:
+            print(e)
     return
 
 def decode_data(content):
