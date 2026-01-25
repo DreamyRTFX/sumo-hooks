@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 load_dotenv()
 endpoints = os.getenv('endpoints').split(",")
-barnsumo = "https://discord.com/api/webhooks/1440084933648580698/LAeb8huuV_3qGAMlByAi6TR1fjs89go9sFRk4EPtwunjX-jTnBuoF9OSvBrxmhIKPl5F"
 
 _request = {
   "username": "Sumo-hooks",
